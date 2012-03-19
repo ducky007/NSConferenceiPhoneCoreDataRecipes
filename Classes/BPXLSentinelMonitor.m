@@ -259,19 +259,6 @@ NSString *BPXLiCloudContainerFilePrefix = @"file://localhost/private/var/mobile/
     if([self.documentsURLs count] == 0) {
         NSLog(@"Container is empty");
     }
-    else if([self.documentsURLs count] == 1) {
-        NSLog(@"One file remaining");
-        // check to see that it's our database
-        for(NSString *urlString in [self.documentsURLs allKeys]) {
-            NSRange iCloudContainerPrefixRange = [urlString rangeOfString:BPXLiCloudContainerFilePrefix];
-            if(iCloudContainerPrefixRange.location != NSNotFound) {
-                NSLog(@"file is %@", [urlString substringFromIndex:iCloudContainerPrefixRange.length]);
-            }
-            else {
-                NSLog(@"file is %@", urlString);
-            }
-        }
-    }
     
     if(!self.creatingSentinelFile) {
         if((self.sentinelFileURL != nil) && ([self.documentsURLs valueForKey:[self.sentinelFileURL absoluteString]] == nil)) {

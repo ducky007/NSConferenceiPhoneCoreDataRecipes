@@ -59,6 +59,8 @@
 #define kStoreTypeLocal 1
 #define kStoreTypeSynced 2
 
+#define BPXL_KEEP_STORE_IN_iCLOUD
+
 NSString *BPXLFirstRunDateKey = @"BPXLFirstRunDateKey";
 
 NSValueTransformer* _imageTransformer;
@@ -127,6 +129,12 @@ NSValueTransformer* _imageTransformer;
                 
                 // Mark our monitor state as ready
                 self.sentinelMonitor.monitorState = iCloudMonitorStateReady;
+                if(self.isFirstRun) {
+                    [self persistentStoreCoordinator:NO];
+                }
+                else {
+                    [self persistentStoreCoordinator:YES];
+                }
             }
             else {
                 NSLog(@"Failed to create uuid");
@@ -160,8 +168,8 @@ NSValueTransformer* _imageTransformer;
     if (managedObjectContext__ != nil) {
         return managedObjectContext__;
     }
-	
-    NSPersistentStoreCoordinator *coordinator = [self persistentStoreCoordinator];
+    
+    NSPersistentStoreCoordinator *coordinator = [self persistentStoreCoordinator:NO];
 
     if (coordinator != nil) {
 // Make life easier by adopting the new NSManagedObjectContext concurrency API
@@ -222,33 +230,66 @@ NSValueTransformer* _imageTransformer;
  Returns the persistent store coordinator for the application.
  If the coordinator doesn't already exist, it is created and the application's store added to it.
  */
-- (NSPersistentStoreCoordinator *)persistentStoreCoordinator {
+- (NSPersistentStoreCoordinator *)persistentStoreCoordinator:(BOOL)cleanDB {
 	
-    if (persistentStoreCoordinator__ != nil) {
+    if((persistentStoreCoordinator__ != nil) && !cleanDB) {
         return persistentStoreCoordinator__;
+    }
+    
+    if(cleanDB) {
+        if(self.syncedPersistentStore != nil) {
+            NSError *removePersistentStoreError = nil;
+            [persistentStoreCoordinator__ removePersistentStore:self.syncedPersistentStore error:&removePersistentStoreError];
+            if(removePersistentStoreError != nil) {
+                NSLog(@"Error encountered removing persistent store form psc: %@", removePersistentStoreError);
+            }
+        }
     }
     
     persistentStoreCoordinator__ = [[NSPersistentStoreCoordinator alloc] initWithManagedObjectModel: [self managedObjectModel]];
 // prep the store path and bundle stuff here since NSBundle isn't totally thread safe
     NSPersistentStoreCoordinator* psc = persistentStoreCoordinator__;
-	NSString *storePath = [[self applicationDocumentsDirectory] stringByAppendingPathComponent:@"Recipes.sqlite"];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         NSFileManager *fileManager = [NSFileManager defaultManager];
-        
+        NSString *storePath = [[self applicationDocumentsDirectory] stringByAppendingPathComponent:@"Recipes.sqlite"];
+
         NSURL *storeUrl = [NSURL fileURLWithPath:storePath];
 // this needs to match the entitlements and provisioning profile
         NSURL *cloudURL = [fileManager URLForUbiquityContainerIdentifier:nil];
         NSString* coreDataCloudContent = [[cloudURL path] stringByAppendingPathComponent:@"recipes_v3"];
-        cloudURL = [NSURL fileURLWithPath:coreDataCloudContent];
+        NSURL *transactionLogDirectoryURL = [NSURL fileURLWithPath:coreDataCloudContent];
+#ifdef BPXL_KEEP_STORE_IN_iCLOUD
+        NSString *databaseDirectory = [[cloudURL path] stringByAppendingPathComponent:@"RecipesDatabase.nosync"];
 
-//  The API to turn on Core Data iCloud support here.
-        NSDictionary* options = [NSDictionary dictionaryWithObjectsAndKeys:@"com.apple.coredata.examples.recipes.3", NSPersistentStoreUbiquitousContentNameKey, cloudURL, NSPersistentStoreUbiquitousContentURLKey, [NSNumber numberWithBool:YES], NSMigratePersistentStoresAutomaticallyOption, [NSNumber numberWithBool:YES], NSInferMappingModelAutomaticallyOption,nil];
+        if([fileManager fileExistsAtPath:databaseDirectory] == NO) {
+            NSError *fileSystemError;
+            [fileManager createDirectoryAtPath:databaseDirectory withIntermediateDirectories:YES attributes:nil error:&fileSystemError];
+            if(fileSystemError != nil) {
+                NSLog(@"Error creating database directory %@", fileSystemError);
+            }
+        }
+        storePath = [databaseDirectory stringByAppendingPathComponent:@"Recipes.sqlite"];
+        storeUrl = [NSURL fileURLWithPath:storePath];
+#endif
+
+        if(cleanDB) {
+            if([fileManager fileExistsAtPath:[storeUrl path]] == YES) {
+                NSError *deletionError = nil;
+                [fileManager removeItemAtURL:storeUrl error:&deletionError];
+                if(deletionError != nil) {
+                    NSLog(@"Error encountered while deleting old database: %@", deletionError);
+                }
+            }
+        }
+        //  The API to turn on Core Data iCloud support here.
+        NSDictionary* options = [NSDictionary dictionaryWithObjectsAndKeys:@"com.apple.coredata.examples.recipes.3", NSPersistentStoreUbiquitousContentNameKey, transactionLogDirectoryURL, NSPersistentStoreUbiquitousContentURLKey, [NSNumber numberWithBool:YES], NSMigratePersistentStoresAutomaticallyOption, [NSNumber numberWithBool:YES], NSInferMappingModelAutomaticallyOption,nil];
 
         NSError *error = nil;
 
         [psc lock];
-        if (![psc addPersistentStoreWithType:NSSQLiteStoreType configuration:nil URL:storeUrl options:options error:&error]) {
+        self.syncedPersistentStore = [psc addPersistentStoreWithType:NSSQLiteStoreType configuration:nil URL:storeUrl options:options error:&error];
+        if (!self.syncedPersistentStore) {
 
             NSLog(@"Unresolved error %@, %@", error, [error userInfo]);
             abort();
